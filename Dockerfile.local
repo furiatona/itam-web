@@ -1,0 +1,110 @@
+FROM ubuntu:24.04
+LABEL maintainer="Brady Wetherington <bwetherington@grokability.com>"
+
+# Set non-interactive frontend for apt
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dependencies
+RUN apt-get update -qqy \
+ && apt-get install -qqy --no-install-recommends \
+    apt-utils \
+    apache2 \
+    apache2-bin \
+    libapache2-mod-php8.3 \
+    php8.3-curl \
+    php8.3-ldap \
+    php8.3-mysql \
+    php8.3-gd \
+    php8.3-xml \
+    php8.3-mbstring \
+    php8.3-zip \
+    php8.3-bcmath \
+    php8.3-redis \
+    php-memcached \
+    patch \
+    curl \
+    wget \
+    vim \
+    git \
+    cron \
+    mysql-client \
+    supervisor \
+    gcc \
+    make \
+    autoconf \
+    libc-dev \
+    libldap-common \
+    pkg-config \
+    php8.3-dev \
+    ca-certificates \
+    unzip \
+    dnsutils \
+ && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Install PEAR
+RUN curl -L -O https://github.com/pear/pearweb_phars/raw/masterMohammad-Ali/go-pear.phar \
+ && php go-pear.phar \
+ && rm go-pear.phar
+
+# Enable PHP modules
+RUN phpenmod gd \
+ && phpenmod bcmath
+
+# Configure PHP variables_order
+RUN sed -i 's/variables_order = .*/variables_order = "EGPCS"/' /etc/php/8.3/apache2/php.ini \
+ && sed -i 's/variables_order = .*/variables_order = "EGPCS"/' /etc/php/8.3/cli/php.ini
+
+# Create docker user
+RUN useradd -m --uid 10000 --gid 50 docker \
+ && echo export APACHE_RUN_USER=docker >> /etc/apache2/envvars \
+ && echo export APACHE_RUN_GROUP=staff >> /etc/apache2/envvars
+
+# Copy Apache configuration
+COPY docker/000-default.conf /etc/apache2/sites-enabled/000-default.conf
+COPY docker/001-default-ssl.conf /etc/apache2/sites-available/001-default-ssl.conf
+
+# Enable Apache modules and sites
+RUN a2enmod rewrite \
+ && a2enmod ssl \
+ && a2ensite 001-default-ssl.conf
+
+# Create necessary directories
+RUN mkdir -p /var/lib/snipeit/ssl \
+ && mkdir -p /var/www/html \
+ && chown -R docker:staff /var/www/html
+
+# Copy configuration files
+COPY docker/column-statistics.cnf /etc/mysql/conf.d/column-statistics.cnf
+COPY docker/docker.env /var/www/html/.env
+
+# Install Composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+
+# Set working directory
+WORKDIR /var/www/html
+
+# Create symbolic links for storage (will be mounted via volume)
+RUN mkdir -p /var/lib/snipeit/keys \
+ && mkdir -p /var/lib/snipeit/data \
+ && mkdir -p /var/lib/snipeit/dumps \
+ && chown -R docker:staff /var/lib/snipeit
+
+# Install application dependencies (as docker user)
+USER docker
+RUN composer install --no-dev --working-dir=/var/www/html || true
+USER root
+
+# Copy startup scripts
+COPY docker/startup.sh /startup.sh
+COPY docker/supervisord.conf /supervisord.conf
+COPY docker/supervisor-exit-event-listener /usr/bin/supervisor-exit-event-listener
+RUN chmod +x /startup.sh /usr/bin/supervisor-exit-event-listener
+
+# Expose ports
+EXPOSE 80 443
+
+# Define volume
+VOLUME ["/var/lib/snipeit"]
+
+# Start the application
+CMD ["/startup.sh"]

@@ -1,0 +1,88 @@
+# Compose file for local development.
+volumes:
+  db_data:
+  redis_data:
+  storage:
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    restart: unless-stopped
+    volumes:
+      - ./:/var/www/html:cached
+      - storage:/var/lib/snipeit
+    ports:
+      - "${APP_PORT:-8000}:80"
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+      redis:
+        condition: service_healthy
+        restart: true
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    container_name: itam-web
+
+  db:
+    image: mariadb:11.4.7
+    restart: unless-stopped
+    volumes:
+      - db_data:/var/lib/mysql
+    env_file:
+      - .env
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    container_name: itam-db
+
+  redis:
+    image: redis:7.0.11
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    container_name: itam-redis
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    platform: linux/amd64
+    restart: unless-stopped
+    ports:
+      - "${PHPMYADMIN_PORT:-8080}:80"
+    env_file:
+      - .env
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: ${DB_USERNAME}
+      PMA_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+    volumes:
+      - /sessions
+    container_name: itam-phpmyadmin
